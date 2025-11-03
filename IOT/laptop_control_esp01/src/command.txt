@@ -1,0 +1,87 @@
+# MQTT Commands for Testing Laptop Controller ESP01
+# Topic: LDrago_windows/ducky_script
+# Broker: broker.emqx.io
+
+## MOSQUITTO_PUB COMMANDS FOR TESTING
+
+### Basic Arrow Key Commands (with repeat=true for continuous control)
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "RIGHT", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "LEFT", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "UP", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "DOWN", "repeat": true}'
+
+### Automation Commands (with repeat=false to prevent duplicates)
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI r", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "STRING notepad", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "ENTER", "repeat": false}'
+
+### Test Deduplication Logic
+# Send this command twice - second one should be rejected due to repeat=false
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "STRING Hello World", "repeat": false}'
+
+# Send this command multiple times - all should be accepted due to repeat=true
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "STRING Test Repeat", "repeat": true}'
+
+### Complex Automation Scripts
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI r\nDELAY 500\nSTRING cmd\nENTER\nDELAY 1000\nSTRING echo Hello from ESP01\nENTER", "repeat": false}'
+
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL a\nDELAY 100\nSTRING This text replaces all", "repeat": false}'
+
+### Media Control Commands
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "MK_VOLUP", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "MK_VOLDOWN", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "MK_MUTE", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "MK_PP", "repeat": false}'
+
+### Function Key Commands
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "F5", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "ALT F4", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL SHIFT ESC", "repeat": false}'
+
+### Test Invalid Commands (should be rejected)
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "wrong_password", "script": "STRING Unauthorized", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"script": "STRING No Password", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "repeat": false}'
+
+### Browser Navigation
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL t\nDELAY 500\nSTRING github.com\nENTER", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL l\nSTRING https://google.com\nENTER", "repeat": false}'
+
+### Text Editing
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL z", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL y", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL c", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL v", "repeat": false}'
+
+### System Commands
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI l", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL ALT DELETE", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI d", "repeat": false}'
+
+### PPT Controller Style Commands (from gesture glove)
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "E1s2t3e4r5", "script": "RIGHT", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "E1s2t3e4r5", "script": "LEFT", "repeat": true}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "E1s2t3e4r5", "script": "F5", "repeat": false}'
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "E1s2t3e4r5", "script": "ESC", "repeat": false}'
+
+### Quick Test Commands
+# Open Calculator
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI r\nDELAY 300\nSTRING calc\nENTER", "repeat": false}'
+
+# Type Hello World
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "STRING Hello World from MQTT!", "repeat": false}'
+
+# Take Screenshot
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "GUI SHIFT s", "repeat": false}'
+
+# Open Task Manager
+mosquitto_pub -h broker.emqx.io -t "LDrago_windows/ducky_script" -m '{"password": "1234", "script": "CTRL SHIFT ESC", "repeat": false}'
+
+## Notes:
+# - Install mosquitto-clients: sudo apt install mosquitto-clients (Linux) or download from mosquitto.org (Windows)
+# - Default control password is "1234" (change via ESP01 web interface at 192.168.x.x)
+# - PPT Controller uses password "E1s2t3e4r5"
+# - repeat=true: Allows duplicate commands (for continuous control like arrow keys)
+# - repeat=false: Rejects duplicate commands within 5 seconds (for automation tasks)
+# - Monitor ESP01 serial output at 115200 baud to see deduplication logic
+# - Commands are forwarded to RP2040 and executed as USB HID keystrokes
