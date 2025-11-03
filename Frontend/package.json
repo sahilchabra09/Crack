@@ -37,8 +37,11 @@
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
+    "react-native-vision-camera": "^4.7.2",
+    "react-native-vision-camera-face-detector": "^1.9.1",
     "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.5.1"
+    "react-native-worklets": "0.5.1",
+    "react-native-worklets-core": "^1.6.2"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

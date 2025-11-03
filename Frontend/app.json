@@ -12,9 +12,7 @@
       "supportsTablet": true
     },
     "android": {
-       "permissions": [
-        "HIGH_SAMPLING_RATE_SENSORS"
-      ],
+      "permissions": ["HIGH_SAMPLING_RATE_SENSORS"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -44,10 +42,19 @@
           }
         }
       ],
+
       [
         "expo-sensors",
         {
           "motionPermission": "Allow $(Frontend) to access your device motion"
+        }
+      ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "$(PRODUCT_NAME) needs camera access for face tracking",
+          "enableMicrophonePermission": true,
+          "microphonePermissionText": "$(PRODUCT_NAME) needs microphone access for audio features"
         }
       ]
     ],
