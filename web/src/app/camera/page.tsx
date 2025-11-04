@@ -15,8 +15,26 @@ export default function CameraPage() {
   const frameCountRef = useRef<number>(0);
   const renderLoopRef = useRef<number | undefined>(undefined);
   const lastSentFrameTimeRef = useRef<number>(0);
-  const TARGET_FPS = trackingMode === 'hand' ? 20 : 15; // Higher FPS for hand-only mode
+  const TARGET_FPS = trackingMode === 'hand' ? 20 : 20; // Increase face-pose to 20 FPS
   const FRAME_INTERVAL = 1000 / TARGET_FPS;
+
+  // Bot control state
+  const [botConnected, setBotConnected] = useState(false);
+  const [botTracking, setBotTracking] = useState(false);
+  const [botStatus, setBotStatus] = useState<string>('Not Connected');
+
+  // Audio recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioStatus, setAudioStatus] = useState<string>('Ready to record');
+  const [aiResponse, setAiResponse] = useState<string>('');
+  const [transcription, setTranscription] = useState<string>('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  // Get backend URLs from environment variables
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
   useEffect(() => {
     startCamera();
@@ -105,7 +123,7 @@ export default function CameraPage() {
 
   const connectWebSocket = () => {
     const endpoint = trackingMode === 'hand' ? 'hand' : 'face';
-    const wsUrl = `ws://localhost:8000/ws/${endpoint}`;
+    const wsUrl = `${WS_URL}/ws/${endpoint}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -163,9 +181,9 @@ export default function CameraPage() {
           return;
         }
         
-        // Create a temporary smaller canvas for sending
+        // Create a temporary smaller canvas for sending (optimized for face-pose)
         const tempCanvas = document.createElement('canvas');
-        const scale = trackingMode === 'hand' ? 0.4 : 0.3; // Higher resolution for hand tracking
+        const scale = trackingMode === 'hand' ? 0.4 : 0.25; // Smaller for face-pose mode (25% = faster)
         tempCanvas.width = video.videoWidth * scale;
         tempCanvas.height = video.videoHeight * scale;
         const tempCtx = tempCanvas.getContext('2d');
@@ -174,8 +192,8 @@ export default function CameraPage() {
           // Draw scaled down video
           tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
           
-          // Convert to base64 with quality based on mode
-          const quality = trackingMode === 'hand' ? 0.5 : 0.3;
+          // Convert to base64 with quality based on mode (lower = faster)
+          const quality = trackingMode === 'hand' ? 0.5 : 0.25;
           const imageData = tempCanvas.toDataURL('image/jpeg', quality);
           
           try {
@@ -202,6 +220,306 @@ export default function CameraPage() {
     };
 
     sendFrame();
+  };
+
+  // Bot Control Functions
+  const connectBot = async () => {
+    try {
+      setBotStatus('Connecting...');
+      const response = await fetch(`${BACKEND_URL}/bot/connect`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      
+      if (data.status === 'connected') {
+        setBotConnected(true);
+        setBotStatus('Connected');
+        console.log('✅ Bot connected:', data);
+      } else {
+        setBotStatus('Connection failed');
+        console.error('❌ Bot connection failed:', data);
+      }
+    } catch (error) {
+      setBotStatus('Connection error');
+      console.error('❌ Bot connection error:', error);
+    }
+  };
+
+  const disconnectBot = async () => {
+    try {
+      await fetch(`${BACKEND_URL}/bot/disconnect`, {
+        method: 'POST',
+      });
+      setBotConnected(false);
+      setBotTracking(false);
+      setBotStatus('Disconnected');
+      console.log('🔌 Bot disconnected');
+    } catch (error) {
+      console.error('❌ Bot disconnect error:', error);
+    }
+  };
+
+  // Text-to-Speech Functions
+  const speakText = (text: string) => {
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    if (!text) return;
+    
+    // Create speech utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Configure voice settings
+    utterance.rate = 1.0;  // Speech rate (0.1 to 10)
+    utterance.pitch = 1.0; // Pitch (0 to 2)
+    utterance.volume = 1.0; // Volume (0 to 1)
+    
+    // Try to select a good quality voice (prefer female voices for AI assistant)
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find(voice => 
+      voice.name.includes('Female') || 
+      voice.name.includes('Samantha') ||
+      voice.name.includes('Google US English') ||
+      voice.lang.includes('en-US')
+    );
+    
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
+    
+    // Event handlers
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      console.log('🔊 Speaking...');
+    };
+    
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      console.log('✅ Speech finished');
+    };
+    
+    utterance.onerror = (error) => {
+      setIsSpeaking(false);
+      console.error('❌ Speech error:', error);
+    };
+    
+    // Speak the text
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+  };
+
+  const replaySpeech = () => {
+    if (aiResponse) {
+      speakText(aiResponse);
+    }
+  };
+
+  // Audio Recording Functions
+  const startAudioRecording = async () => {
+    try {
+      setAudioStatus('Requesting microphone permission...');
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 16000,
+          channelCount: 1
+        }
+      });
+
+      // Determine best audio format
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        mimeType = 'audio/ogg;codecs=opus';
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        if (audioChunksRef.current.length === 0) {
+          setAudioStatus('No audio recorded');
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        sendAudioToBackend(audioBlob);
+        
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start(100);
+      setIsRecording(true);
+      setAudioStatus('🔴 Recording... Click to stop');
+      console.log('🎤 Audio recording started');
+      
+    } catch (error) {
+      console.error('❌ Microphone error:', error);
+      let errorMessage = 'Microphone access failed. ';
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          errorMessage += 'Please allow microphone access.';
+        } else if (error.name === 'NotFoundError') {
+          errorMessage += 'No microphone found.';
+        } else if (error.name === 'NotReadableError') {
+          errorMessage += 'Microphone in use by another app.';
+        } else {
+          errorMessage += error.message;
+        }
+      }
+      
+      setAudioStatus(errorMessage);
+      setIsRecording(false);
+    }
+  };
+
+  const stopAudioRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      setAudioStatus('Processing audio...');
+      console.log('🛑 Audio recording stopped');
+    }
+  };
+
+  const toggleAudioRecording = () => {
+    if (isRecording) {
+      stopAudioRecording();
+    } else {
+      startAudioRecording();
+    }
+  };
+
+  const sendAudioToBackend = async (audioBlob: Blob) => {
+    if (!audioBlob || audioBlob.size === 0) {
+      setAudioStatus('No audio to send');
+      return;
+    }
+
+    setAudioStatus('Sending audio to AI...');
+    
+    const formData = new FormData();
+    const fileName = `audio.${audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('ogg') ? 'ogg' : 'webm'}`;
+    
+    // API expects 'audio' field name (not 'audio_file')
+    formData.append('audio', audioBlob, fileName);
+    
+    // Optional: Add conversation_id if you want to maintain context
+    // formData.append('conversation_id', 'your-session-id');
+
+    try {
+      const response = await fetch('https://bbhkf952-8000.inc1.devtunnels.ms/input/audio', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error (${response.status}): ${errorText}`);
+      }
+
+      const responseData = await response.json();
+      
+      console.log('✅ AI Response:', responseData);
+      
+      // Store transcription and response
+      if (responseData.transcription) {
+        setTranscription(responseData.transcription);
+        console.log('📝 Transcription:', responseData.transcription);
+      }
+      
+      // Display the final response from the API
+      if (responseData.final_response) {
+        setAiResponse(responseData.final_response);
+        setAudioStatus(`✅ Response received`);
+        speakText(responseData.final_response); // Auto-speak the response
+      } else if (responseData.bot_response) {
+        setAiResponse(responseData.bot_response);
+        setAudioStatus(`✅ Response received`);
+        speakText(responseData.bot_response); // Auto-speak the response
+      } else {
+        setAiResponse(responseData.query || 'Command received');
+        setAudioStatus(`✅ Processed`);
+      }
+      
+      // Log additional info
+      if (responseData.subsystems_activated) {
+        console.log('⚙️ Subsystems:', responseData.subsystems_activated);
+      }
+      
+    } catch (error) {
+      console.error('❌ Audio processing error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setAudioStatus(`❌ Failed: ${errorMessage}`);
+    }
+  };
+
+  const startBotTracking = async () => {
+    if (!botConnected) {
+      alert('Please connect to bot first!');
+      return;
+    }
+    
+    try {
+      const mode = trackingMode === 'face-pose' ? 'face' : 'hand';
+      const response = await fetch(`${BACKEND_URL}/bot/tracking/start?mode=${mode}`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        setBotTracking(true);
+        setBotStatus(`Tracking: ${mode}`);
+        console.log('🤖 Bot tracking started:', data);
+      } else {
+        console.error('❌ Failed to start tracking:', data);
+      }
+    } catch (error) {
+      console.error('❌ Error starting bot tracking:', error);
+    }
+  };
+
+  const stopBotTracking = async () => {
+    try {
+      await fetch(`${BACKEND_URL}/bot/tracking/stop`, {
+        method: 'POST',
+      });
+      setBotTracking(false);
+      setBotStatus('Connected');
+      console.log('⏹️ Bot tracking stopped');
+    } catch (error) {
+      console.error('❌ Error stopping bot tracking:', error);
+    }
+  };
+
+  const stopBot = async () => {
+    try {
+      await fetch(`${BACKEND_URL}/bot/stop`, {
+        method: 'POST',
+      });
+      console.log('🛑 Bot emergency stop');
+    } catch (error) {
+      console.error('❌ Error stopping bot:', error);
+    }
   };
 
   const drawDetectionOverlay = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
@@ -564,6 +882,160 @@ export default function CameraPage() {
               <p className="text-2xl font-bold">Click &quot;Start Tracking&quot; to begin</p>
             </div>
           )}
+        </div>
+
+        <div className="mt-6 bg-gray-800 rounded-lg p-6">
+          <h2 className="text-xl font-bold mb-4">🤖 Bot Control Panel</h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            {/* Connection Status */}
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <p className="text-sm text-gray-400">Bot Status</p>
+              <p className={`text-xl font-bold ${botConnected ? 'text-green-400' : 'text-red-400'}`}>
+                {botStatus}
+              </p>
+            </div>
+            
+            {/* Tracking Status */}
+            <div className="bg-gray-700 p-4 rounded-lg">
+              <p className="text-sm text-gray-400">Tracking Status</p>
+              <p className={`text-xl font-bold ${botTracking ? 'text-green-400' : 'text-gray-400'}`}>
+                {botTracking ? '🟢 Active' : '⚫ Inactive'}
+              </p>
+            </div>
+          </div>
+
+          {/* Control Buttons */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <button
+              onClick={connectBot}
+              disabled={botConnected}
+              className={`px-4 py-3 rounded-lg font-semibold transition ${
+                botConnected
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              {botConnected ? '✓ Connected' : '🔌 Connect Bot'}
+            </button>
+
+            <button
+              onClick={startBotTracking}
+              disabled={!botConnected || botTracking || !isStreaming}
+              className={`px-4 py-3 rounded-lg font-semibold transition ${
+                !botConnected || botTracking || !isStreaming
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-700 text-white'
+              }`}
+            >
+              {botTracking ? '✓ Tracking' : '🎯 Start Tracking'}
+            </button>
+
+            <button
+              onClick={stopBotTracking}
+              disabled={!botTracking}
+              className={`px-4 py-3 rounded-lg font-semibold transition ${
+                !botTracking
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-yellow-600 hover:bg-yellow-700 text-white'
+              }`}
+            >
+              ⏸️ Stop Tracking
+            </button>
+
+            <button
+              onClick={stopBot}
+              disabled={!botConnected}
+              className={`px-4 py-3 rounded-lg font-semibold transition ${
+                !botConnected
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-red-600 hover:bg-red-700 text-white'
+              }`}
+            >
+              🛑 Emergency Stop
+            </button>
+          </div>
+
+          {/* Audio Recording Control */}
+          <div className="mt-4 p-4 bg-purple-900/20 border border-purple-500 rounded-lg">
+            <h3 className="text-lg font-bold text-purple-400 mb-2">🎤 Voice Commands</h3>
+            <p className="text-sm text-gray-400 mb-3">{audioStatus}</p>
+            
+            {/* Transcription Display */}
+            {transcription && (
+              <div className="mb-3 p-3 bg-gray-700 rounded-lg">
+                <p className="text-xs text-gray-400 mb-1">📝 You said:</p>
+                <p className="text-sm text-white italic">&quot;{transcription}&quot;</p>
+              </div>
+            )}
+            
+            {/* AI Response Display */}
+            {aiResponse && (
+              <div className="mb-3">
+                <div className="p-3 bg-purple-800/30 rounded-lg max-h-32 overflow-y-auto mb-2">
+                  <p className="text-xs text-purple-300 mb-1">🤖 AI Response:</p>
+                  <p className="text-sm text-white">{aiResponse}</p>
+                </div>
+                
+                {/* TTS Control Buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={replaySpeech}
+                    disabled={isSpeaking}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${
+                      isSpeaking
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-green-600 hover:bg-green-700 text-white'
+                    }`}
+                  >
+                    {isSpeaking ? '🔊 Speaking...' : '🔊 Replay'}
+                  </button>
+                  
+                  {isSpeaking && (
+                    <button
+                      onClick={stopSpeaking}
+                      className="px-3 py-2 rounded-lg text-sm font-semibold bg-red-600 hover:bg-red-700 text-white transition"
+                    >
+                      🔇 Stop
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            <button
+              onClick={toggleAudioRecording}
+              className={`w-full px-4 py-3 rounded-lg font-semibold transition ${
+                isRecording
+                  ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                  : 'bg-purple-600 hover:bg-purple-700 text-white'
+              }`}
+            >
+              {isRecording ? '🔴 Stop Recording' : '🎤 Start Voice Recording'}
+            </button>
+          </div>
+
+          <button
+            onClick={disconnectBot}
+            disabled={!botConnected}
+            className={`mt-3 w-full px-4 py-2 rounded-lg font-semibold transition ${
+              !botConnected
+                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-700 hover:bg-gray-600 text-white'
+            }`}
+          >
+            🔌 Disconnect Bot
+          </button>
+
+          <div className="mt-4 p-4 bg-yellow-900/20 border border-yellow-500 rounded">
+            <p className="text-yellow-400 mb-2">⚠️ <strong>Important:</strong></p>
+            <ul className="list-disc list-inside space-y-1 text-sm text-yellow-300">
+              <li>Make sure your bot is powered on and connected to WiFi</li>
+              <li>Start camera tracking BEFORE starting bot tracking</li>
+              <li>Bot will follow the first detected face/hand</li>
+              <li>Use Emergency Stop if bot behaves unexpectedly</li>
+            </ul>
+          </div>
         </div>
 
         <div className="mt-6 bg-gray-800 rounded-lg p-6">

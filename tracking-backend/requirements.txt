@@ -5,3 +5,4 @@ python-multipart>=0.0.12
 mediapipe>=0.10.9
 opencv-python>=4.8.0
 numpy>=1.24.0
+paho-mqtt>=1.6.1

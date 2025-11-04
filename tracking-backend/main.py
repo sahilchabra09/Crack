@@ -14,16 +14,19 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+# Import MQTT Bot Controller
+from mqtt_bot_controller import MQTTBotController
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MediaPipe Processing Server")
 
-# CORS middleware
+# CORS middleware - Allow all origins for port forwarding/tunnels
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["*"],  # Allow all origins (including tunnels and phone access)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,15 +42,18 @@ class MediaPipeProcessor:
     def initialize_face_detector(self):
         """Initialize MediaPipe Face Landmarker for better side profile detection"""
         try:
-            base_options = python.BaseOptions(model_asset_path='models/face_landmarker.task')
+            base_options = python.BaseOptions(
+                model_asset_path='models/face_landmarker.task',
+                delegate=python.BaseOptions.Delegate.GPU  # Use GPU acceleration
+            )
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
                 output_face_blendshapes=False,
                 output_facial_transformation_matrixes=False,
-                num_faces=2,  # Support multiple faces
-                min_face_detection_confidence=0.3,  # Lower threshold for side profiles
-                min_face_presence_confidence=0.3,
-                min_tracking_confidence=0.3,
+                num_faces=1,  # Track only 1 face for speed
+                min_face_detection_confidence=0.5,  # Higher threshold for speed
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
                 running_mode=vision.RunningMode.IMAGE
             )
             self.face_detector = vision.FaceLandmarker.create_from_options(options)
@@ -58,13 +64,16 @@ class MediaPipeProcessor:
     def initialize_hand_detector(self):
         """Initialize MediaPipe Hand Landmarker"""
         try:
-            base_options = python.BaseOptions(model_asset_path='models/hand_landmarker.task')
+            base_options = python.BaseOptions(
+                model_asset_path='models/hand_landmarker.task',
+                delegate=python.BaseOptions.Delegate.GPU  # Use GPU acceleration
+            )
             options = vision.HandLandmarkerOptions(
                 base_options=base_options,
                 num_hands=2,
-                min_hand_detection_confidence=0.5,  # Higher threshold for faster processing
-                min_hand_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_hand_detection_confidence=0.6,  # Higher threshold for speed
+                min_hand_presence_confidence=0.6,
+                min_tracking_confidence=0.6,
                 running_mode=vision.RunningMode.IMAGE
             )
             self.hand_detector = vision.HandLandmarker.create_from_options(options)
@@ -75,15 +84,16 @@ class MediaPipeProcessor:
     def initialize_pose_detector(self):
         """Initialize MediaPipe Pose Landmarker"""
         try:
-            # Use lite model for better performance
+            # Use lite model for better performance with GPU
             base_options = python.BaseOptions(
-                model_asset_path='models/pose_landmarker_lite.task'
+                model_asset_path='models/pose_landmarker_lite.task',
+                delegate=python.BaseOptions.Delegate.GPU  # Use GPU acceleration
             )
             options = vision.PoseLandmarkerOptions(
                 base_options=base_options,
-                min_pose_detection_confidence=0.5,  # Higher threshold for faster processing
-                min_pose_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_pose_detection_confidence=0.6,  # Higher threshold for speed
+                min_pose_presence_confidence=0.6,
+                min_tracking_confidence=0.6,
                 running_mode=vision.RunningMode.IMAGE
             )
             self.pose_detector = vision.PoseLandmarker.create_from_options(options)
@@ -229,6 +239,9 @@ class MediaPipeProcessor:
 # Global processor instance
 processor = MediaPipeProcessor()
 
+# Global MQTT Bot Controller instance
+bot_controller: Optional[MQTTBotController] = None
+
 # Thread pool for parallel processing
 executor = ThreadPoolExecutor(max_workers=2)  # One for face, one for pose
 
@@ -270,6 +283,207 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+# --- MQTT Bot Control Endpoints ---
+
+@app.post("/bot/connect")
+async def bot_connect(
+    broker: str = "broker.emqx.io",
+    topic: str = "LDrago_windows/ducky_script",
+    password: str = "E1s2t3e4r5"
+):
+    """Connect to MQTT broker for bot control"""
+    global bot_controller
+    
+    try:
+        if bot_controller is not None:
+            bot_controller.disconnect()
+        
+        bot_controller = MQTTBotController(
+            broker=broker,
+            topic=topic,
+            password=password
+        )
+        
+        if bot_controller.connect():
+            return {
+                "status": "connected",
+                "message": f"Connected to {broker}",
+                "broker": broker,
+                "topic": topic
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to connect to MQTT broker"
+            }
+    except Exception as e:
+        logger.error(f"Error connecting to bot: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/bot/disconnect")
+async def bot_disconnect():
+    """Disconnect from MQTT broker"""
+    global bot_controller
+    
+    try:
+        if bot_controller is not None:
+            bot_controller.disconnect()
+            bot_controller = None
+            return {
+                "status": "disconnected",
+                "message": "Disconnected from MQTT broker"
+            }
+        else:
+            return {
+                "status": "warning",
+                "message": "No active connection"
+            }
+    except Exception as e:
+        logger.error(f"Error disconnecting: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/bot/command")
+async def bot_command(
+    left: int = 0,
+    right: int = 0,
+    s1: int = 90,
+    s2: int = 90
+):
+    """Send manual command to bot"""
+    global bot_controller
+    
+    if bot_controller is None or not bot_controller.connected:
+        return {
+            "status": "error",
+            "message": "Bot not connected. Use /bot/connect first"
+        }
+    
+    try:
+        success = bot_controller.send_command(left, right, s1, s2)
+        return {
+            "status": "success" if success else "error",
+            "command": {
+                "L": left,
+                "R": right,
+                "S1": s1,
+                "S2": s2
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error sending command: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/bot/stop")
+async def bot_stop():
+    """Stop bot movement"""
+    global bot_controller
+    
+    if bot_controller is None or not bot_controller.connected:
+        return {
+            "status": "error",
+            "message": "Bot not connected"
+        }
+    
+    try:
+        bot_controller.stop_bot()
+        return {
+            "status": "success",
+            "message": "Bot stopped"
+        }
+    except Exception as e:
+        logger.error(f"Error stopping bot: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/bot/tracking/start")
+async def bot_tracking_start(mode: str = "face"):
+    """Start tracking mode"""
+    global bot_controller
+    
+    if bot_controller is None or not bot_controller.connected:
+        return {
+            "status": "error",
+            "message": "Bot not connected. Use /bot/connect first"
+        }
+    
+    if mode not in ["face", "hand"]:
+        return {
+            "status": "error",
+            "message": "Invalid mode. Use 'face' or 'hand'"
+        }
+    
+    try:
+        bot_controller.start_tracking(mode=mode)
+        return {
+            "status": "success",
+            "message": f"Tracking started in {mode} mode",
+            "mode": mode
+        }
+    except Exception as e:
+        logger.error(f"Error starting tracking: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.post("/bot/tracking/stop")
+async def bot_tracking_stop():
+    """Stop tracking mode"""
+    global bot_controller
+    
+    if bot_controller is None or not bot_controller.connected:
+        return {
+            "status": "error",
+            "message": "Bot not connected"
+        }
+    
+    try:
+        bot_controller.stop_tracking()
+        return {
+            "status": "success",
+            "message": "Tracking stopped"
+        }
+    except Exception as e:
+        logger.error(f"Error stopping tracking: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.get("/bot/status")
+async def bot_status():
+    """Get bot status"""
+    global bot_controller
+    
+    if bot_controller is None:
+        return {
+            "connected": False,
+            "tracking_enabled": False
+        }
+    
+    return {
+        "connected": bot_controller.connected,
+        "tracking_enabled": bot_controller.tracking_enabled,
+        "tracking_mode": bot_controller.tracking_mode if bot_controller.tracking_enabled else None,
+        "current_position": {
+            "left": bot_controller.current_left,
+            "right": bot_controller.current_right,
+            "s1": bot_controller.current_s1,
+            "s2": bot_controller.current_s2
+        }
+    }
+
 @app.websocket("/ws/face")
 async def websocket_face(websocket: WebSocket):
     """WebSocket endpoint for face and pose detection with multithreading"""
@@ -289,18 +503,21 @@ async def websocket_face(websocket: WebSocket):
             message = json.loads(data)
             
             if message.get("type") == "frame":
-                # Decode base64 image
+                # Decode base64 image (optimized)
                 image_data = base64.b64decode(message["data"].split(",")[1])
                 nparr = np.frombuffer(image_data, np.uint8)
                 image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                # Skip RGB conversion - MediaPipe can handle BGR directly
+                # Convert only once before processing
                 image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 
                 # Process face and pose in parallel threads
                 loop = asyncio.get_event_loop()
                 
                 # Submit both tasks to thread pool simultaneously
-                face_future = loop.run_in_executor(executor, process_face_thread, image_rgb.copy())
-                pose_future = loop.run_in_executor(executor, process_pose_thread, image_rgb.copy())
+                face_future = loop.run_in_executor(executor, process_face_thread, image_rgb)
+                pose_future = loop.run_in_executor(executor, process_pose_thread, image_rgb)
                 
                 # Wait for both to complete in parallel
                 face_result, pose_result = await asyncio.gather(face_future, pose_future)
@@ -314,6 +531,10 @@ async def websocket_face(websocket: WebSocket):
                 # No hands in this mode
                 result["hands"] = []
                 result["hands_count"] = 0
+                
+                # Update bot tracking if enabled
+                if bot_controller and bot_controller.tracking_enabled and bot_controller.tracking_mode == "face":
+                    bot_controller.update_tracking(result)
                 
                 # Send result back
                 await websocket.send_json(result)
@@ -363,6 +584,10 @@ async def websocket_hand(websocket: WebSocket):
                 result["count"] = 0
                 result["poses"] = []
                 result["poses_count"] = 0
+                
+                # Update bot tracking if enabled
+                if bot_controller and bot_controller.tracking_enabled and bot_controller.tracking_mode == "hand":
+                    bot_controller.update_tracking(result)
                 
                 # Send result back
                 await websocket.send_json(result)
